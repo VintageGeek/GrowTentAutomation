@@ -1,10 +1,10 @@
-# GrowTentAutomation
+# MyProject
 
-A Particle project named GrowTentAutomation
+A Particle project named MyProject
 
 ## Welcome to your project!
 
-Every new Particle project is composed of 3 important elements that you'll see have been created in your project directory for GrowTentAutomation.
+Every new Particle project is composed of 3 important elements that you'll see have been created in your project directory for MyProject.
 
 #### ```/src``` folder:  
 This is the source folder that contains the firmware files for your project. It should *not* be renamed. 
