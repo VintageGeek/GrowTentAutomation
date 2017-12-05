@@ -10,14 +10,15 @@
 #include <I2CSoilMoistureSensor.h>
 
 //constants
-#define NUMBER_OF_SOIL_SENSORS 1
+#define NUMBER_OF_SOIL_SENSORS 2
 #define AddrHumidTemp 0x28
-byte soilSensorArray[NUMBER_OF_SOIL_SENSORS] {0x30};
+#define i2CMuxer 0x74
+byte soilSensorArray[NUMBER_OF_SOIL_SENSORS] {0x30,0x31};
 String soilSensorReadingArray[NUMBER_OF_SOIL_SENSORS][4];
 
 //variables
 
-I2CSoilMoistureSensor soilSensor(soilSensorArray[0]);//grab 1st soil sensor address
+//I2CSoilMoistureSensor soilSensor;
 NCD2Relay relay;
 
 double cTemp = 0.0, fTemp = 0.0, humidity = 0.0;
@@ -81,28 +82,30 @@ void initializeNCD2Relay()
 }
 void initializeSoilMoistureSensors()
 {
-  //initiate the Soil Sensor object
-      soilSensor.begin();
-      delay(3000); // give some time to boot up
-
-      msg = "I2C Soil Moisture Sensor begin() done.  Total sensors:  " + String(NUMBER_OF_SOIL_SENSORS);
+      msg = "Qty of I2C Soil Sensors:  " + String(NUMBER_OF_SOIL_SENSORS);
       Particle.publish("setup", msg , 60, PRIVATE);
       String address="";
       String version = "";
-      for (size_t i = 0; i < NUMBER_OF_SOIL_SENSORS; i++) {
 
-         msg = "Validating I2C Soil Moisture Sensor "+ String(i+1) +" of "+ String(NUMBER_OF_SOIL_SENSORS) + ": ";
+      for (size_t i = 1; i <= NUMBER_OF_SOIL_SENSORS; i++) {
+         selectChannel(i);
+         I2CSoilMoistureSensor soilSensor(soilSensorArray[i-1]);
+         soilSensor.begin();
+         delay(3000); // give some time to boot up
 
-         if (i>0){
-           soilSensor.changeSensor(soilSensorArray[i]);
-         }
+         msg = "I2C Soil Sensor "+ String(i) +" of "+ String(NUMBER_OF_SOIL_SENSORS) + ": ";
+
+         //if (i>1){
+           //soilSensor.changeSensor(soilSensorArray[i-1]);
+        // }
          address = String(soilSensor.getAddress(), HEX);
          version = String(soilSensor.getVersion());
 
         // publish sensors info
-        Particle.publish("setup", msg + " Address: " + address + " - Firmware: " + version, 60, PRIVATE);
+        Particle.publish("setup", msg + " Ch: " + i + " - Addr: " + address + " - FW: " + version, 60, PRIVATE);
         delay(1000);
       }
+      selectChannel(0);
 }
 void getHumiTempMeasures()
 {
@@ -135,13 +138,19 @@ void getHumiTempMeasures()
 void getSoilSensorMeasures()
 {
   for (size_t i = 0; i < NUMBER_OF_SOIL_SENSORS; i++) {
-    if (i>0){
-      soilSensor.changeSensor(soilSensorArray[i]);
-    }
+    selectChannel(i+1);
+    I2CSoilMoistureSensor soilSensor(soilSensorArray[i]);
+    soilSensor.begin();
+    delay(3000); // give some time to boot up
+//    selectChannel(i+1);
+  //  if (i>0){
+    //  soilSensor.changeSensor(soilSensorArray[i]);
+    //}
     GetSoilMoisture(&soilSensor, i);
     GetTemperature(&soilSensor, i);
     GetLight(&soilSensor, i);
   }
+  selectChannel(0);
 }
 void GetSoilMoisture(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
     while (currentSensor->isBusy()) delay(50); // available since FW 2.3
@@ -153,7 +162,7 @@ void GetSoilMoisture(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
         HandleError("GetMoisture");
         return ;
     }
-    int moisture = map(soilMoistureRaw,266,600,0,100);
+    int moisture = map(soilMoistureRaw,277,600,0,100);
     soilSensorReadingArray[sensorNumber][0]=String(soilMoistureRaw);
     soilSensorReadingArray[sensorNumber][1]=String(moisture);
 }
@@ -210,6 +219,41 @@ void PublishSoilMeasurements(){
       String sensor = String(i+1);
       Particle.publish("SoilSensor-"+sensor, jsonSensorData, 60, PRIVATE);
     }
+}
+
+void selectChannel(uint8_t channel)
+{
+  if( channel >= 0 && channel < 5 ) {
+    Wire.beginTransmission(i2CMuxer);
+    switch(channel) {
+      case 0:
+        Wire.write(0x00);
+        break;
+      case 1:
+        Wire.write(0x01);
+        break;
+      case 2:
+        Wire.write(0x02);
+        break;
+      case 3:
+        Wire.write(0x04);
+        break;
+      case 4:
+        Wire.write(0x08);
+        break;
+
+
+        Serial.print("Channel ");
+        Serial.print(channel);
+        Serial.print(" selected.");
+
+    }
+    Wire.endTransmission();
+  } else {
+    Serial.print("TCA9546A ERROR - Wrong channel selected: ");
+    Serial.print(channel);
+    Serial.println(" (available channels 0 (none),1,2,3,4)");
+  }
 }
 
 void loop() {
