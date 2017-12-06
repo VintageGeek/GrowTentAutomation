@@ -5,69 +5,167 @@
  * Date: 27Nov2017
  */
 
-//#region Global Variables
+//#region - Global settings
 // This #include statement was automatically added by the Particle IDE.
 #include <NCD2Relay.h>
 #include <I2CSoilMoistureSensor.h>
 
-//constants
+//Directives
 #define NUMBER_OF_SOIL_SENSORS 2
-#define AddrHumidTemp 0x28
+#define HumiChipAddress 0x28  //https://github.com/ControlEverythingCommunity/HCPA-5V-U3/blob/master/README.md
 #define i2CMuxer 0x74
 #define NUMBER_OF_MUX_CHANNELS 5
 #define MAX_MUX_CHANNEL_DEVICES 127
+#define NUMBER_OF_RELAYS 2
+#define LOOP_DELAY 30000
+
+//global variables
 byte soilSensorArray[NUMBER_OF_SOIL_SENSORS] {0x30,0x31};
 String soilSensorReadingArray[NUMBER_OF_SOIL_SENSORS][4];
-
-bool addrFoundArray[127];
-bool ic2MuxArray[NUMBER_OF_MUX_CHANNELS][MAX_MUX_CHANNEL_DEVICES] ;//Support 8 devices per mux channel
-bool muxScanned = false;
-
-
-//variables
+bool ic2MuxArray[NUMBER_OF_MUX_CHANNELS][MAX_MUX_CHANNEL_DEVICES] ;
 NCD2Relay relay;
-double cTemp = 0.0, fTemp = 0.0, humidity = 0.0;
+int relayState[NUMBER_OF_RELAYS];
+bool relayEnabled[NUMBER_OF_RELAYS];
+double tentTempCelsius = 0.0, tentTempFahrenheit = 0.0, tentHumidity = 0.0;
 bool error;
 String errorMessage;
-int sensorPumpTotalNumber=1;
-int relayOneStatus=0;
-int relayTwoStatus=0;
-bool disableRelay1=false;
-bool disableRelay2=false;
-bool success=false;
-bool humidityHitMax=false;
-int lowHumidity=64;
-int highHumidity = 67;
-bool needToWater;
 String msg = "";
 //#endregion
 
-//#region setup() runs once, when the device is first turned on.
+//#region - Main program methods
 void setup(){
   Particle.publish("setup", "Starting setup...", 60, PRIVATE);
 
-  //Init Wire for I2C Communication
-  Wire.setSpeed(400000);
-    if (!Wire.isEnabled()) {
-        Wire.begin();
-    }
+    //Init Wire for I2C Communication
+    Wire.setSpeed(400000);
+      if (!Wire.isEnabled()) {
+          Wire.begin();
+      }
 
-  initMuxArray();
-
-  for (size_t i = 0; i < 5; i++) {
-    selectChannel(i); //set mux to all channels disabled
-    scanIc2Bus(i);  //scan bus initially to find main devices not on the mux
-    delay(2000);
-  }
-
-  msg = "Qty of I2C Soil Sensors:  " + String(numberOfSoilSensors());
-  Particle.publish("setup", msg , 60, PRIVATE);
-
-  initializeSoilMoistureSensors();
-  initializeNCD2Relay();
-  initializeHumiTemp();
-  delay(1000);
+    initMuxArray();
+    initSoilMoistureSensors();
+    initNCD2Relay();
+    initHumiChip();
+    delay(1000);
   Particle.publish("setup", "Finished setup", 60, PRIVATE);
+}
+void loop() {
+  getHumiChipMeasures();
+  getSoilSensorMeasures();
+  getRelayStatus();
+  PublishTentMeasurements();
+  PublishSoilMeasurements();
+  delay(LOOP_DELAY);
+}
+//#endregion
+
+//#region - HumiChip methods
+void initHumiChip(){
+    // Start I2C transmission for module
+  Wire.beginTransmission(HumiChipAddress);
+  // Send start command
+  Wire.write(0x80);
+  // Stop I2C transmission
+  Wire.endTransmission();
+  delay(300);
+  Particle.publish("setup", "Humidity & Temp Sensor Started");
+}
+void getHumiChipMeasures(){
+  unsigned int data[4];
+  Wire.beginTransmission(HumiChipAddress);
+  Wire.endTransmission();
+  // Request 4 byte of data
+  Wire.requestFrom(HumiChipAddress, 4);
+  // Read 4 bytes of data
+  // humidity msb, humidity lsb, cTemp msb, cTemp lsb
+  if (Wire.available() == 4)
+  {
+    data[0] = Wire.read();
+    data[1] = Wire.read();
+    data[2] = Wire.read();
+    data[3] = Wire.read();
+  // Convert the data to 14-bits
+  tentHumidity = (((data[0] & 0x3F) * 256) + data[1]) / 16384.0 * 100.0;
+  tentTempCelsius = (((data[2] * 256) + (data[3] & 0xFC)) / 4) / 16384.0 * 165.0 - 40.0;
+  tentTempFahrenheit = (tentTempCelsius * 1.8) + 32;
+  //adjust temp and humidity based on calibration of 2 other thermometers/humidity sensors
+  tentTempFahrenheit+=1.3;
+  tentHumidity-=6.4;
+  }
+}
+//#endregion
+
+//#region - SoilSensor(s) methods
+void initSoilMoistureSensors(){
+      String address="";
+      String version = "";
+
+      for (size_t i = 1; i <= NUMBER_OF_SOIL_SENSORS; i++) {
+         selectChannel(i);
+         I2CSoilMoistureSensor soilSensor(soilSensorArray[i-1]);
+         soilSensor.begin();
+         delay(3000); // give some time to boot up
+         msg = "I2C Soil Sensor "+ String(i) +" of "+ String(NUMBER_OF_SOIL_SENSORS) + ": ";
+         address = String(soilSensor.getAddress(), HEX);
+         version = String(soilSensor.getVersion());
+
+        // publish sensors info
+        Particle.publish("setup", msg + " Ch: " + i + " - Addr: " + address + " - FW: " + version, 60, PRIVATE);
+        delay(1000);
+      }
+      selectChannel(0);  //reset mux - all channels off
+}
+void getSoilSensorMeasures() {
+  for (size_t i = 0; i < NUMBER_OF_SOIL_SENSORS; i++) {
+    selectChannel(i+1);
+    I2CSoilMoistureSensor soilSensor(soilSensorArray[i]);
+    soilSensor.begin();
+    delay(3000); // give some time to boot up
+    //    selectChannel(i+1);
+    //  if (i>0){
+    //  soilSensor.changeSensor(soilSensorArray[i]);
+    //}
+    GetSoilMoisture(&soilSensor, i);
+    GetSoilTemperature(&soilSensor, i);
+    GetSoilLight(&soilSensor, i);
+  }
+  selectChannel(0);
+}
+void GetSoilMoisture(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
+    while (currentSensor->isBusy()) delay(50); // available since FW 2.3
+    int soilMoistureRaw = currentSensor->getCapacitance();
+    if (!IsValidSoilMoisture(soilMoistureRaw)){
+        errorMessage="Soil moisture reading out of bounds: " + String(soilMoistureRaw);
+        soilSensorReadingArray[sensorNumber][0]="ERROR";
+        soilSensorReadingArray[sensorNumber][1]="ERROR";
+        HandleError("GetMoisture");
+        return ;
+    }
+    int moisture = map(soilMoistureRaw,277,600,0,100);
+    soilSensorReadingArray[sensorNumber][0]=String(soilMoistureRaw);
+    soilSensorReadingArray[sensorNumber][1]=String(moisture);
+}
+void GetSoilTemperature(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
+    int temperature = currentSensor->getTemperature();
+    if (!IsValidTemperature(temperature)){
+        errorMessage="Temperature reading out of bounds: " + String(temperature);
+        soilSensorReadingArray[sensorNumber][2]="ERROR";
+        HandleError("GetTemperature");
+        return;
+    }
+    float tempInF=(temperature/(float)10)*9/5+32;
+
+     soilSensorReadingArray[sensorNumber][2]=String(tempInF);
+}
+void GetSoilLight(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
+    int light = currentSensor->getLight(true);
+    soilSensorReadingArray[sensorNumber][3]=String(light);
+}
+bool IsValidSoilMoisture(int moistureReading){
+    return ((moistureReading > 200) & (moistureReading <700));
+}
+bool IsValidTemperature(int temperatureReading){
+    return ((temperatureReading>0) & (temperatureReading <500));
 }
 int numberOfSoilSensors(){
   int numberOfSensors=0;
@@ -80,83 +178,42 @@ int numberOfSoilSensors(){
   }
   return numberOfSensors;
 }
+//#endregion
+
+//#region - NCD2Relay methods
+void initNCD2Relay(){
+  //initiate the NCD2Relay
+
+  relay.setAddress(1,0,0);
+  getRelayStatus();
+  Particle.variable("Humidifier", relayState[0]);
+  Particle.variable("WaterPump", relayState[1]);
+  relay.turnOffAllRelays();
+  Particle.publish("setup", "Relay 1 was " + String(relayState[0]) + ". Relay 2 was " + String(relayState[1]) + ". All relays turned off (0)", 60, PRIVATE);
+
+}
+void getRelayStatus(){
+  for (size_t i = 0; i < NUMBER_OF_RELAYS; i++) {
+    relayState[i] = relay.readRelayStatus(i+1);
+  }
+}
+//#endregion
+
+//#region - TCA9546 IC2 Multiplexer
 void initMuxArray(){
   for (size_t i = 0; i < NUMBER_OF_MUX_CHANNELS; i++) {
     for (size_t j = 0; j < MAX_MUX_CHANNEL_DEVICES; j++) {
       ic2MuxArray[i][j]=false;
     }
   }
-}
-void initializeSoilMoistureSensors(){
-      //figure out how many devices wehave in the mux
 
-
-
-
-      String address="";
-      String version = "";
-
-      for (size_t i = 1; i <= NUMBER_OF_SOIL_SENSORS; i++) {
-         selectChannel(i);
-         I2CSoilMoistureSensor soilSensor(soilSensorArray[i-1]);
-         soilSensor.begin();
-         delay(3000); // give some time to boot up
-
-         msg = "I2C Soil Sensor "+ String(i) +" of "+ String(NUMBER_OF_SOIL_SENSORS) + ": ";
-
-         //if (i>1){
-           //soilSensor.changeSensor(soilSensorArray[i-1]);
-        // }
-         address = String(soilSensor.getAddress(), HEX);
-         version = String(soilSensor.getVersion());
-
-        // publish sensors info
-        Particle.publish("setup", msg + " Ch: " + i + " - Addr: " + address + " - FW: " + version, 60, PRIVATE);
-        delay(1000);
-      }
-      selectChannel(0);
-}
-void initializeNCD2Relay(){
-  //initiate the NCD2Relay
-  relay.setAddress(1,0,0);
-  int status1=relay.readRelayStatus(1);
-  String state1="OFF";
-  if (status1==1){state1="ON";}
-   int status2=relay.readRelayStatus(2);
-  String state2="OFF";
-  if (status2==1){state2="ON";}
-  Particle.variable("Humidifier", relayOneStatus);
-  Particle.variable("WaterPump", relayTwoStatus);
-  relay.turnOffAllRelays();
-  Particle.publish("setup", "Relay 1 was " + state1 + ". Relay 2 was " + state2 + ". All relays turned off", 60, PRIVATE);
-}
-void initializeHumiTemp(){
-    // Start I2C transmission for module
-  Wire.beginTransmission(AddrHumidTemp);
-  // Send start command
-  Wire.write(0x80);
-  // Stop I2C transmission
-  Wire.endTransmission();
-  delay(300);
-  Particle.publish("setup", "Humidity & Temp Sensor Started");
-}
-
-
-//#endregion
-
-void loop() {
-  error=false;
-  errorMessage="";
-
-  getHumiTempMeasures();
-  getSoilSensorMeasures();
-
-  relayOneStatus=relay.readRelayStatus(1);
-  relayTwoStatus=relay.readRelayStatus(2);
-  PublishTentMeasurements(fTemp, humidity, relayOneStatus, relayTwoStatus );
-  PublishSoilMeasurements();
-  delay(30000);
-
+  for (size_t i = 0; i < 5; i++) {
+    selectChannel(i); //set mux to all channels disabled
+    scanIc2Bus(i);  //scan bus initially to find main devices not on the mux
+    delay(2000);
+  }
+  msg = "Qty of I2C Soil Sensors:  " + String(numberOfSoilSensors());
+  Particle.publish("setup", msg , 60, PRIVATE);
 }
 void scanIc2Bus(int channel)
     {
@@ -178,7 +235,7 @@ void scanIc2Bus(int channel)
             Serial.print("0");
             if (ic2MuxArray[0][address]==false) {
               ic2MuxArray[channel][address]=true;
-              Particle.publish("sensors","Found on Ch: " + String(channel)+" - Addr: " + String(address,HEX),60,PRIVATE);
+              Particle.publish("I2C","Device on Ch: " + String(channel)+" - Addr: " + String(address,HEX),60,PRIVATE);
 
             }
 
@@ -200,117 +257,6 @@ void scanIc2Bus(int channel)
         Serial.println("done\n");
 
     }
-void getHumiTempMeasures(){
-  unsigned int data[4];
-
-  // Start I2C transmission
-  Wire.beginTransmission(AddrHumidTemp);
-  // Stop I2C transmission
-  Wire.endTransmission();
-  // Request 4 byte of data
-  Wire.requestFrom(AddrHumidTemp, 4);
-  // Read 4 bytes of data
-  // humidity msb, humidity lsb, cTemp msb, cTemp lsb
-  if (Wire.available() == 4)
-  {
-    data[0] = Wire.read();
-    data[1] = Wire.read();
-    data[2] = Wire.read();
-    data[3] = Wire.read();
-  // Convert the data to 14-bits
-  humidity = (((data[0] & 0x3F) * 256) + data[1]) / 16384.0 * 100.0;
-  cTemp = (((data[2] * 256) + (data[3] & 0xFC)) / 4) / 16384.0 * 165.0 - 40.0;
-  fTemp = (cTemp * 1.8) + 32;
-  //adjust temp and humidity based on calibration of 2 other thermometers/humidity sensors
-  fTemp+=1.3;
-  humidity-=6.4;
-
-  }
-}
-void getSoilSensorMeasures() {
-  for (size_t i = 0; i < NUMBER_OF_SOIL_SENSORS; i++) {
-    selectChannel(i+1);
-    I2CSoilMoistureSensor soilSensor(soilSensorArray[i]);
-    soilSensor.begin();
-    delay(3000); // give some time to boot up
-    //    selectChannel(i+1);
-    //  if (i>0){
-    //  soilSensor.changeSensor(soilSensorArray[i]);
-    //}
-    GetSoilMoisture(&soilSensor, i);
-    GetTemperature(&soilSensor, i);
-    GetLight(&soilSensor, i);
-  }
-  selectChannel(0);
-}
-void GetSoilMoisture(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
-    while (currentSensor->isBusy()) delay(50); // available since FW 2.3
-    int soilMoistureRaw = currentSensor->getCapacitance();
-    if (!IsValidSoilMoisture(soilMoistureRaw)){
-        errorMessage="Soil moisture reading out of bounds: " + String(soilMoistureRaw);
-        soilSensorReadingArray[sensorNumber][0]="ERROR";
-        soilSensorReadingArray[sensorNumber][1]="ERROR";
-        HandleError("GetMoisture");
-        return ;
-    }
-    int moisture = map(soilMoistureRaw,277,600,0,100);
-    soilSensorReadingArray[sensorNumber][0]=String(soilMoistureRaw);
-    soilSensorReadingArray[sensorNumber][1]=String(moisture);
-}
-void GetTemperature(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
-    int temperature = currentSensor->getTemperature();
-    if (!IsValidTemperature(temperature)){
-        errorMessage="Temperature reading out of bounds: " + String(temperature);
-        soilSensorReadingArray[sensorNumber][2]="ERROR";
-        HandleError("GetTemperature");
-        return;
-    }
-    float tempInF=(temperature/(float)10)*9/5+32;
-
-     soilSensorReadingArray[sensorNumber][2]=String(tempInF);
-}
-void GetLight(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
-    int light = currentSensor->getLight(true);
-    soilSensorReadingArray[sensorNumber][3]=String(light);
-}
-bool IsValidSoilMoisture(int moistureReading){
-    return ((moistureReading > 200) & (moistureReading <700));
-}
-bool IsValidTemperature(int temperatureReading){
-    return ((temperatureReading>0) & (temperatureReading <500));
-}
-void HandleError(String functionalArea){
-     Particle.publish("ERROR: " + functionalArea, errorMessage, 60, PRIVATE);
-     relay.turnOffAllRelays();
-     error=false;
-     delay(20000);
-}
-void PublishTentMeasurements(double tentTemperature, double tentHumidity, int relay1, int relay2){
-
-    String jsonSensorData = "{\"TentTemperature\":{{TentTemperature}},\"TentHumidity\":{{TentHumidity}},\"RelayOne\":{{RelayOne}},\"RelayTwo\":{{RelayTwo}}}";
-
-    jsonSensorData.replace("{{TentTemperature}}",String(tentTemperature));
-    jsonSensorData.replace("{{TentHumidity}}",String(tentHumidity));
-    jsonSensorData.replace("{{RelayOne}}",String(relay1));
-    jsonSensorData.replace("{{RelayTwo}}",String(relay2));
-
-    Particle.publish("Tent", jsonSensorData, 60, PRIVATE);
-
-}
-void PublishSoilMeasurements(){
-
-    for (size_t i = 0; i < NUMBER_OF_SOIL_SENSORS; i++) {
-
-      String jsonSensorData = "{\"SoilMoistureRaw\":{{SoilMoistureRaw}},\"SoilMoisture\":{{SoilMoisture}},\"SoilTemperature\":{{SoilTemperature}},\"Light\":{{Light}}}";
-      jsonSensorData.replace("{{SoilMoistureRaw}}",soilSensorReadingArray[i][0]);
-      jsonSensorData.replace("{{SoilMoisture}}",soilSensorReadingArray[i][1]);
-      jsonSensorData.replace("{{SoilTemperature}}",soilSensorReadingArray[i][2]);
-      jsonSensorData.replace("{{Light}}",soilSensorReadingArray[i][3]);
-
-      String sensor = String(i+1);
-      Particle.publish("SoilSensor-"+sensor, jsonSensorData, 60, PRIVATE);
-    }
-}
 void selectChannel(uint8_t channel){
   if( channel >= 0 && channel < 5 ) {
     Wire.beginTransmission(i2CMuxer);
@@ -344,26 +290,39 @@ void selectChannel(uint8_t channel){
     Serial.println(" (available channels 0 (none),1,2,3,4)");
   }
 }
-void WaterPlant(int pumpNumber){
+//#endregion
 
-     //relay.turnOnRelay(1);
-        delay(1000);
-       // relay.turnOffRelay(1);
+//#region - Utility methods
+void HandleError(String functionalArea){
+     Particle.publish("ERROR: " + functionalArea, errorMessage, 60, PRIVATE);
+     relay.turnOffAllRelays();
+     error=false;
+     delay(20000);
 }
-int HumidityNeeded(double humidity){
+void PublishTentMeasurements(){
 
-    int returnVal=0;
+    String jsonSensorData = "{\"TentTemperature\":{{TentTemperature}},\"TentHumidity\":{{TentHumidity}},\"RelayOne\":{{RelayOne}},\"RelayTwo\":{{RelayTwo}}}";
 
-    if (humidity>highHumidity) { humidityHitMax=true; }
-    if (humidity<lowHumidity) { humidityHitMax=false; }
+    jsonSensorData.replace("{{TentTemperature}}",String(tentTempFahrenheit));
+    jsonSensorData.replace("{{TentHumidity}}",String(tentHumidity));
+    jsonSensorData.replace("{{RelayOne}}",String(relayState[0]));
+    jsonSensorData.replace("{{RelayTwo}}",String(relayState[1]));
 
-    if ((humidity <= highHumidity & !humidityHitMax) | (humidity < lowHumidity)){
-        returnVal= 1;
+    Particle.publish("Tent", jsonSensorData, 60, PRIVATE);
+
+}
+void PublishSoilMeasurements(){
+
+    for (size_t i = 0; i < NUMBER_OF_SOIL_SENSORS; i++) {
+
+      String jsonSensorData = "{\"SoilMoistureRaw\":{{SoilMoistureRaw}},\"SoilMoisture\":{{SoilMoisture}},\"SoilTemperature\":{{SoilTemperature}},\"Light\":{{Light}}}";
+      jsonSensorData.replace("{{SoilMoistureRaw}}",soilSensorReadingArray[i][0]);
+      jsonSensorData.replace("{{SoilMoisture}}",soilSensorReadingArray[i][1]);
+      jsonSensorData.replace("{{SoilTemperature}}",soilSensorReadingArray[i][2]);
+      jsonSensorData.replace("{{Light}}",soilSensorReadingArray[i][3]);
+
+      String sensor = String(i+1);
+      Particle.publish("SoilSensor-"+sensor, jsonSensorData, 60, PRIVATE);
     }
-
-    return returnVal;
-
 }
-bool PlantNeedsWater(int moistureReading){
-    return moistureReading <=15;
-  }
+//#endregion
