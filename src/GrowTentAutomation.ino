@@ -89,7 +89,7 @@ void getHumiChipMeasures(){
   tentTempCelsius = (((data[2] * 256) + (data[3] & 0xFC)) / 4) / 16384.0 * 165.0 - 40.0;
   tentTempFahrenheit = (tentTempCelsius * 1.8) + 32;
   //adjust temp and humidity based on calibration of 2 other thermometers/humidity sensors
-  tentTempFahrenheit+=1.3;
+  tentTempFahrenheit+=.5;
   tentHumidity-=6.4;
   }
 }
@@ -132,6 +132,7 @@ void getSoilSensorMeasures() {
   selectChannel(0);
 }
 void GetSoilMoisture(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
+  int moisture=0;
     while (currentSensor->isBusy()) delay(50); // available since FW 2.3
     int soilMoistureRaw = currentSensor->getCapacitance();
     if (!IsValidSoilMoisture(soilMoistureRaw)){
@@ -141,7 +142,13 @@ void GetSoilMoisture(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
         HandleError("GetMoisture");
         return ;
     }
-    int moisture = map(soilMoistureRaw,277,600,0,100);
+
+    if (sensorNumber==0) {
+       moisture = map(soilMoistureRaw,277,600,0,100);
+    } else {
+       moisture = map(soilMoistureRaw,275,630,0,100);
+    }
+
     soilSensorReadingArray[sensorNumber][0]=String(soilMoistureRaw);
     soilSensorReadingArray[sensorNumber][1]=String(moisture);
 }
