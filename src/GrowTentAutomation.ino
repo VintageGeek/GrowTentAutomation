@@ -11,7 +11,7 @@
 #include <I2CSoilMoistureSensor.h>
 
 //Directives
-#define NUMBER_OF_SOIL_SENSORS 2
+#define NUMBER_OF_SOIL_SENSORS 1
 #define HumiChipAddress 0x28  //https://github.com/ControlEverythingCommunity/HCPA-5V-U3/blob/master/README.md
 #define i2CMuxer 0x74
 #define NUMBER_OF_MUX_CHANNELS 5
@@ -20,7 +20,7 @@
 #define LOOP_DELAY 30000
 
 //global variables
-byte soilSensorArray[NUMBER_OF_SOIL_SENSORS] {0x30,0x31};
+byte soilSensorArray[NUMBER_OF_SOIL_SENSORS] {0x30};
 String soilSensorReadingArray[NUMBER_OF_SOIL_SENSORS][4];
 bool ic2MuxArray[NUMBER_OF_MUX_CHANNELS][MAX_MUX_CHANNEL_DEVICES] ;
 NCD2Relay relay;
@@ -30,10 +30,14 @@ double tentTempCelsius = 0.0, tentTempFahrenheit = 0.0, tentHumidity = 0.0;
 bool error;
 String errorMessage;
 String msg = "";
+int ventTent=false;
+
 //#endregion
 
 //#region - Main program methods
 void setup(){
+
+  Particle.variable("VentTent", ventTent);
   Particle.publish("setup", "Starting setup...", 60, PRIVATE);
 
     //Init Wire for I2C Communication
@@ -89,7 +93,7 @@ void getHumiChipMeasures(){
   tentTempCelsius = (((data[2] * 256) + (data[3] & 0xFC)) / 4) / 16384.0 * 165.0 - 40.0;
   tentTempFahrenheit = (tentTempCelsius * 1.8) + 32;
   //adjust temp and humidity based on calibration of 2 other thermometers/humidity sensors
-  tentTempFahrenheit+=.5;
+  //tentTempFahrenheit+=.5;
   tentHumidity-=6.4;
   }
 }
@@ -144,9 +148,10 @@ void GetSoilMoisture(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
     }
 
     if (sensorNumber==0) {
-       moisture = map(soilMoistureRaw,277,600,0,100);
+       moisture = map(soilMoistureRaw,271,568,0,100);
     } else {
-       moisture = map(soilMoistureRaw,275,630,0,100);
+      // moisture = map(soilMoistureRaw,269,637,0,100);
+      moisture = map(soilMoistureRaw,259,407,0,100);
     }
 
     soilSensorReadingArray[sensorNumber][0]=String(soilMoistureRaw);
@@ -315,8 +320,11 @@ void PublishTentMeasurements(){
     jsonSensorData.replace("{{RelayOne}}",String(relayState[0]));
     jsonSensorData.replace("{{RelayTwo}}",String(relayState[1]));
 
-    Particle.publish("Tent", jsonSensorData, 60, PRIVATE);
 
+    if(tentHumidity>65.0) {ventTent=true;}
+    if(tentHumidity<50.0) {ventTent=false;}
+    Particle.publish("Vent",String(ventTent),60,PRIVATE);
+    Particle.publish("Tent", jsonSensorData, 60, PRIVATE);
 }
 void PublishSoilMeasurements(){
 
