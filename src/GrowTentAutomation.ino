@@ -11,16 +11,16 @@
 #include <I2CSoilMoistureSensor.h>
 
 //Directives
-#define NUMBER_OF_SOIL_SENSORS 1
+#define NUMBER_OF_SOIL_SENSORS 2
 #define HumiChipAddress 0x28  //https://github.com/ControlEverythingCommunity/HCPA-5V-U3/blob/master/README.md
 #define i2CMuxer 0x74
 #define NUMBER_OF_MUX_CHANNELS 5
 #define MAX_MUX_CHANNEL_DEVICES 127
 #define NUMBER_OF_RELAYS 2
-#define LOOP_DELAY 30000
+#define LOOP_DELAY 15000
 
 //global variables
-byte soilSensorArray[NUMBER_OF_SOIL_SENSORS] {0x30};
+byte soilSensorArray[NUMBER_OF_SOIL_SENSORS] {0x30,0x31};
 String soilSensorReadingArray[NUMBER_OF_SOIL_SENSORS][4];
 bool ic2MuxArray[NUMBER_OF_MUX_CHANNELS][MAX_MUX_CHANNEL_DEVICES] ;
 NCD2Relay relay;
@@ -148,10 +148,10 @@ void GetSoilMoisture(I2CSoilMoistureSensor *currentSensor, int sensorNumber){
     }
 
     if (sensorNumber==0) {
-       moisture = map(soilMoistureRaw,271,568,0,100);
+       moisture = map(soilMoistureRaw,273,619,0,100);
     } else {
-      // moisture = map(soilMoistureRaw,269,637,0,100);
-      moisture = map(soilMoistureRaw,259,407,0,100);
+       moisture = map(soilMoistureRaw,273,646,0,100);
+
     }
 
     soilSensorReadingArray[sensorNumber][0]=String(soilMoistureRaw);
