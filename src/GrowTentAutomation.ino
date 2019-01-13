@@ -18,6 +18,7 @@
 #define MAX_MUX_CHANNEL_DEVICES 127
 #define NUMBER_OF_RELAYS 2
 #define LOOP_DELAY 15000
+STARTUP(WiFi.selectAntenna(ANT_AUTO));
 
 //global variables
 byte soilSensorArray[NUMBER_OF_SOIL_SENSORS] {0x30,0x31};
